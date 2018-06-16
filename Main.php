@@ -1,12 +1,14 @@
 <?php
 /**
  * @file   Multiprocess.php
- * @author 刘重量
+ * @author liuzhongliang(13439694341@qq.com)
  * @date   2018/05/06 10:14:51
- * @brief  多进程执行的主进程类
+ * @brief  主进程类
  **/
 class MultiProcess_Main extends MultiProcess_Base {
 
+    private $jobName = '';   //作业名
+    private $nameSpace = __NAMESPACE__; //命名空间
     /**
      * @var \MultiProcess_Scheduler_Base 任务调度名或者一个任务调度器对象
      */
@@ -24,6 +26,7 @@ class MultiProcess_Main extends MultiProcess_Base {
      * 构造函数(私有，单例)
      * @param callable        $callHandler 回调函数
      * @param array|string    $arrInit     配置项数组
+     * @return mixed
      */
     private function __construct(callable $callHandler, $arrInit = array()) {
         try {
@@ -31,6 +34,7 @@ class MultiProcess_Main extends MultiProcess_Base {
                 throw new Exception('所传任务处理回调函数不可用', self::ERROR_WRONG_PARAM);
             }
             $this->callHandler = $callHandler;
+            $this->jobName = serialize($callHandler);
             if(!empty($arrInit) && is_array($arrInit)) {
                 $this->init($arrInit);
             }
@@ -38,6 +42,15 @@ class MultiProcess_Main extends MultiProcess_Base {
             self::recordError($e->getCode(), $e->getMessage());
             return false;
         }
+    }
+
+    /** 重建对象
+     * @param callable $callHandler 回调函数
+     */
+    protected static function rebuildInstance(callable $callHandler) {
+        $jobName = serialize($callHandler);
+        self::$arr_Instances[__NAMESPACE__][$jobName] = new self($callHandler);
+        self::$obj_Instance = self::$arr_Instances[__NAMESPACE__][$jobName];
     }
 
     /**
@@ -91,11 +104,10 @@ class MultiProcess_Main extends MultiProcess_Base {
      * 开始多进程处理的执行函数
      * @return bool|\MultiProcess_Main
      */
-    public function exec() {
-        $mainProcessId = posix_getpid();
+    public function execute() {
         try {
             //如果是静态调用
-            if (empty($this)) {
+            if (empty($this) || !($this instanceof  self)) {
                 $args = func_get_args();
                 $argNum = count($args);
                 if (empty($args) || $argNum <1) {
@@ -112,18 +124,16 @@ class MultiProcess_Main extends MultiProcess_Base {
                     $arrInit  = array_combine($initKeys, $args);
                     $obj->init($arrInit);
                 }
-                return $obj->exec();
+                return $obj->execute();
             }
 
             //检查执行的条件是否已具备
             $this->checkPreconditions();
-
             //格式化任务包数组;过滤掉已被相同程序处理中的任务包;得到本次需开启的进程数
             $this->preExecute();
 
             //开始执行
             $res = $this->objScheduler->exec($this->callHandler, $this->forkNum, $this->callType);
-
             //执行完毕
             if ($res) {
                 //如果是异步调用,保存一下本次的调度信息
@@ -134,13 +144,7 @@ class MultiProcess_Main extends MultiProcess_Base {
             } 
             return false;
         } catch (Exception $e) {
-            $pid = posix_getpid();
-            if ($pid != $mainProcessId) {
-                posix_kill($pid, SIGKILL);
-                pcntl_waitpid($pid, $status, WUNTRACED);
-            }
             $this->recordError($e->getCode(), $e->getMessage());
-
             if(self::ERROR_NOT_NEED_EXEC == $e->getCode()) {
                 return $this;
             }
@@ -162,7 +166,7 @@ class MultiProcess_Main extends MultiProcess_Base {
             if (empty($this)) {//如果是静态调用
                 $obj = null;
                 if (is_callable($callHandler) && self::is_callHandler($callHandler)) {
-                    $obj = self::getInstance($callHandler, $namespace);
+                    $obj = self::getInstance($callHandler);
                 }
                 if (empty($callHandler) && $namespace == __NAMESPACE__) {
                     $obj = self::$obj_Instance;
@@ -173,7 +177,7 @@ class MultiProcess_Main extends MultiProcess_Base {
                 return false;
             } elseif (!empty($callHandler) || $namespace!= __NAMESPACE__) {
                 if(!empty($callHandler) && self::is_callHandler($callHandler) && ($callHandler != $this->callHandler || $namespace!= __NAMESPACE__)) {
-                    $obj = self::getInstance($callHandler,$namespace);
+                    $obj = self::getInstance($callHandler);
                     if ($obj instanceof self) {
                         return $obj->getJobExecDetails();
                     }
@@ -204,6 +208,9 @@ class MultiProcess_Main extends MultiProcess_Base {
 
             //初始化查询结果
             $result = array(
+                'job'    => $this->jobName, //作业名
+                'namespace' => $this->nameSpace, //命名空间
+                'start_time' => date('Y-m-d H:i:s', $this->objScheduler->jobStartTime), //作业开始时间
                 'status' => self::JOB_STATUS_STILL_WAIT, //作业当前的状态值
                 'desc'   => self::$arrJobExecDesc[self::JOB_STATUS_STILL_WAIT], //作业当前的状态描述
                 'list'   => array(), //详细列表
@@ -225,21 +232,25 @@ class MultiProcess_Main extends MultiProcess_Base {
             }
 
             $packetResults = array();
-            /**
-             * 获取等待执行的任务数组
-             */
-            $waitPackets = $this->objScheduler->getWaitPackets();//从调度器中获得当前正在等待分配子进程执行任务的任务包成员数组
-            if (!empty($waitPackets) && is_array($waitPackets)) {
-                $packetResults = array_fill_keys(array_keys($waitPackets), self::PACKET_STATUS_WAIT);
-            }
 
-            /**
-             * 获取正在执行的任务包id等信息
-             */
-            $processPackets = $this->objScheduler->getPacketAllocationList(array_keys($this->arrPackets));
-            if (!empty($processPackets) && is_array($processPackets)) {
-                $processPacketResults = array_fill_keys(array_keys($processPackets), self::PACKET_STATUS_PROCESS);
-                $packetResults = array_merge($packetResults, $processPacketResults);
+            //如果是异步调用，获取正在等待执行的任务组和正在执行的任务组信息
+            if ($this->callType == self::TYPE_CALL_WNOHANG) {
+                /**
+                 * 获取等待执行的任务数组
+                 */
+                $waitPackets = $this->objScheduler->getWaitPackets();//从调度器中获得当前正在等待分配子进程执行任务的任务包成员数组
+                if (!empty($waitPackets) && is_array($waitPackets)) {
+                    $packetResults = array_fill_keys(array_keys($waitPackets), self::PACKET_STATUS_WAIT);
+                }
+
+                /**
+                 * 获取正在执行的任务包id等信息
+                 */
+                $processPackets = $this->objScheduler->getPacketAllocationList(array_keys($this->arrPackets));
+                if (!empty($processPackets) && is_array($processPackets)) {
+                    $processPacketResults = array_fill_keys(array_keys($processPackets), self::PACKET_STATUS_PROCESS);
+                    $packetResults = array_merge($packetResults, $processPacketResults);
+                }
             }
 
             /**
@@ -258,6 +269,7 @@ class MultiProcess_Main extends MultiProcess_Base {
                 $missPacketsResults = array_fill_keys(array_keys($missPackets), self::PACKET_STATUS_WRONG);
                 $packetResults = array_merge($packetResults, $missPacketsResults);
             }
+
             $total = array_count_values($packetResults);
             foreach ($packetResults as $packetId => $status) {
                 $result['list'][$status]['total'] = $total[$status];
@@ -306,7 +318,7 @@ class MultiProcess_Main extends MultiProcess_Base {
      * @return array
      */
     public function getError() {
-        return $this->error;
+        return self::$error;
     }
 
     /**
@@ -316,10 +328,9 @@ class MultiProcess_Main extends MultiProcess_Base {
         if (empty($this->callHandler) || empty($this->arrTasks)) {
             throw new Exception('缺少可用的回调执行函数传入或执行的对象任务数组', self::ERROR_MISS_PARAM);
         }
-
         if (is_subclass_of($this->objScheduler, 'MultiProcess_Scheduler_Base')) {
             $objScheduler = &$this->objScheduler;
-            $this->objScheduler = $objScheduler::getInstance($this->callHandler, __NAMESPACE__);
+            $this->objScheduler = $objScheduler::getInstance($this->callHandler);
         }
         if (!($this->objScheduler instanceof MultiProcess_Scheduler_Base)) {
             throw new Exception('调度器不可用', self::ERROR_WRONG_SCHEDULER);
@@ -341,52 +352,58 @@ class MultiProcess_Main extends MultiProcess_Base {
     private function preExecute() {
 
         //加载本次要执行的任务进调度器
-        $this->objScheduler->loadArrTasks($this->arrTasks, $this->arrPackets);
+        $this->arrPackets = $this->objScheduler->loadArrTasks($this->arrTasks);
+
+        //设置子进程的执行时长（运行时限; 单位：秒）
+        $this->objScheduler->setProcessDuration($this->runTime);
+
+        //如果是异步调用,则预存下本次调度信息
+        if ($this->callType == self::TYPE_CALL_WNOHANG) {
+            $this->objScheduler->saveDispatcherInfo($this->callHandler, $this->arrPackets);
+        }
 
         //返回调度器处理后将本次将要执行的任务数(过滤掉已有其它程序执行的相同成员任务)
         $waitTasks = $this->objScheduler->getWaitPackets();
         if (empty($waitTasks)) {
-            throw new Exception('所有任务已有其它相同程序执行，本次无需执行', self::ERROR_NOT_NEED_EXEC);
+            if ($this->callType == MultiProcess_Base::TYPE_CALL_WNOHANG) {//如果是异步执行，直接返回
+                throw new Exception('所有任务已有其它相同程序执行，本次无需执行', self::ERROR_NOT_NEED_EXEC);
+            }
         } else {
-            //如果等待执行的任务包数小于预设的开启进程数，则修改开启进程数为等待执行的任务包数
-            $waitTaskNum = count($waitTasks);
-            $this->forkNum = $waitTaskNum < $this->forkNum ? $waitTaskNum : $this->forkNum;
+            //对将要执行的任务排序
+            $this->objScheduler->sortPackets($this->packetSort);
         }
-        //对将要执行的任务排序
-        $this->objScheduler->sortPackets($this->packetSort);
-
-        //设置子进程的执行时长（运行时限; 单位：秒）
-        $this->objScheduler->setProcessDuration($this->runTime);
+        //如果等待执行的任务包数小于预设的开启进程数，则修改开启进程数为等待执行的任务包数
+        $waitTaskNum = count($waitTasks);
+        $this->forkNum = $waitTaskNum < $this->forkNum ? $waitTaskNum : $this->forkNum;
     }
 
     /**
      * 魔术方法，当一个对象被外部当成一个函数调用时
-     * @param callable      $handler      处理单个任务的回调函数
      * @param array         $arrTasks     由多个等到被回调函数处理的任务对象 组成的任务组 数组
      * @param int           $processNum   开启的多进程数
      * @param int           $callType     调用方式类型，1.异步调用非阻塞;  2.同步调用.阻塞
      * @param int           $limiTime     限时
      * @param int           $packetSort   执行顺序
      * @param string|object $subScheduler 调度器
-     * @return bool
+     * @return bool|object
      */
-    public function __invoke(callable $handler, array $arrTasks, $processNum = 5, $limiTime = 86400, $callType = self::TYPE_CALL_WNOHANG, $packetSort = self::SORT_NORMAL, $subScheduler = self::DEF_SCHEDULER) {
-        if (false === self::is_CallHandler($handler) || false === self::is_arrTasks($arrTasks)) {
+    public function __invoke(array $arrTasks, $processNum = 5, $limiTime = 86400, $callType = self::TYPE_CALL_WNOHANG, $packetSort = self::SORT_NORMAL, $subScheduler = self::DEF_SCHEDULER) {
+        try{
+            $arrInit = array(
+                'arrTasks'   => $arrTasks,
+                'forkNum'    => $processNum,
+                'callType'   => $callType,
+                'packetSort' => $packetSort,
+                'limtTime'   => $limiTime,
+                'scheduler'  => $subScheduler,
+            );
+            $this->init($arrInit);
+            $res = $this->execute();
+            return $res;
+        } catch (Exception $e) {
+            $this->recordError($e->getCode(), $e->getMessage());
             return false;
         }
-        $jobId = self::getJobId($handler, $arrTasks);
-        $obj = self::getInstance($jobId);
-        $arrInit = array(
-            'forkNum' => $processNum,
-            'callType' => $callType,
-            'packetSort' => $packetSort,
-            'limtTime' => $limiTime,
-            'scheduler' => $subScheduler,
-        );
-        if (false === $obj->init($arrInit)) {
-            return false;
-        }
-        return $obj->exec();
     }
 
     /**
@@ -395,30 +412,40 @@ class MultiProcess_Main extends MultiProcess_Base {
      * @param  array  $arguments 参数数组
      * @return bool|mixed
      */
-    public static function __callStace($name, array $arguments) {
-        if ($name == 'exec' && count($arguments) > 1) {
-            return call_user_func_array(__CLASS__, $arguments);
-        }
-        if ($name == 'init' && !empty($arguments[0]) && is_array($arguments[0])) {
-            $arrInit = &$arguments[0];
-            if (!empty($arrInit['jobId'])) {
-                $obj = self::getInstance($arrInit['jobId']);
-            } elseif (!empty($arrInit['callHandler']) && !empty($arrInit['arrTasks'])) {
-                $jobId = self::getJobId($arrInit['callHandler'], $arrInit['arrTasks']);
-                $obj = self::getInstance($jobId);
-            } else {
-                $obj = self::$obj_Instance;
+    public static function __callStatic($name, array $arguments) {
+        try{
+            if ($name == 'exec' && count($arguments) > 1 && is_callable($arguments[0])) {
+                $obj = self::getInstance($arguments[0]);
+                if ($obj instanceof self) {
+                    unset($arguments[0]);
+                    $res = call_user_func_array($obj, $arguments);
+                    return $res;
+                }
             }
-            if ($obj instanceof self) {
-                return $obj->init($arrInit);
+            if ($name == 'init' && !empty($arguments[0]) && is_array($arguments[0])) {
+                $arrInit = &$arguments[0];
+                if (!empty($arrInit['callHandler'])) {
+                    $obj = self::getInstance($arrInit['callHandler']);
+                } else {
+                    $obj = self::$obj_Instance;
+                }
+                if ($obj instanceof self) {
+                    return $obj->init($arrInit);
+                }
+            } elseif ($name == 'getJobExecDetails' && (empty($arguments[0]) || is_string($arguments[0]))) {
+                $obj = empty($arguments[0]) ? self::$obj_Instance : self::getInstance($arguments[0]);
+                if ($obj instanceof self) {
+                    return $obj->getJobExecDetails($arguments[0]);
+                }
+            } elseif ($name == 'getError') {
+                return self::$error;
             }
-        } elseif ($name == 'getJobExecDetails' && (empty($arguments[0]) || is_string($arguments[0]))) {
-            $obj = empty($arguments[0]) ? self::$obj_Instance : self::getInstance($arguments[0]);
-            if ($obj instanceof self) {
-                return $obj->getJobExecDetails($arguments[0]);
+            return false;
+        } catch (Exception $e) {
+            if(self::$obj_Instance instanceof  self) {
+                self::$obj_Instance->recordError($e->getCode(), $e->getMessage());
             }
-        } else if ($name == 'getError' && self::$obj_Instance instanceof self) {
-            return self::$obj_Instance->getError();
+            return false;
         }
     }
 }

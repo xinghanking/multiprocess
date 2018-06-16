@@ -1,7 +1,7 @@
 <?php
 /**
  * @file Multiprocess_child.php
- * @author 刘重量
+ * @author liuzhongliang(13439694341@qq.com)
  * @date 2018/05/06 10:14:51
  * @brief  多进程执行的子进程类(主要功能从调度器申请任务进行执行)
  **/

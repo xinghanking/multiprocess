@@ -11,7 +11,7 @@ abstract class MultiProcess_Base {
      * 项目常量定义
      */
     const APP_NAME             = 'LeiDa';                        //项目名
-    const FORK_LIMIT           = 400;                            //项目内本类所有应用在单个服务器系统中同时存在的所开最大进程数
+    const FORK_LIMIT           = 800;                            //项目内本类所有应用在单个服务器系统中同时存在的所开最大进程数
     const KEYWORD_PROCESS      = 'process';                      //子进程信息表名称关键词标识
     const KEYWORD_TASK         = 'task';                         //任务关键词标识
     const CALSS_MAIN           = 'MultiProcess_Main';            //主调类名
@@ -62,28 +62,23 @@ abstract class MultiProcess_Base {
     /*
      * 错误码选项
      */
-    const ERROR_FREE                 = 0; //无错误
-    const ERROR_WRONG_PARAM          = 1; //错误的参数值
-    const ERROR_MISS_PARAM           = 2; //必需参数没有传
-    const ERROR_WRONG_SCHEDULER      = 3; //调度器不可用
-    const ERROR_OVER_FORK_UPPER      = 4; //进程数已达到上限
-    const ERROR_NOT_NEED_EXEC        = 5; //所有任务已有其它相同程序执行，本次无需执行
-    const ERROR_FORK_PROCESS_FAIL    = 6; //创建子进程失败
-    const ERROR_QUERY_FROM_SCHEDULER = 7; //从调度器中查询数据时发生错误
-    const ERROR_REDIS_WRONG          = 8; //redis故障
-    const ERROR_SYS_WRONG            = 9; //系统故障
+    const ERROR_FREE                 = 0;     //无错误
+    const ERROR_WRONG_PARAM          = 1;     //错误的参数值
+    const ERROR_MISS_PARAM           = 2;     //必需参数没有传
+    const ERROR_WRONG_SCHEDULER      = 3;     //调度器不可用
+    const ERROR_OVER_FORK_UPPER      = 4;     //进程数已达到上限
+    const ERROR_NOT_NEED_EXEC        = 5;     //所有任务已有其它相同程序执行，本次无需执行
+    const ERROR_FORK_PROCESS_FAIL    = 6;     //创建子进程失败
+    const ERROR_QUERY_FROM_SCHEDULER = 7;     //从调度器中查询数据时发生错误
+    const ERROR_REDIS_WRONG          = 8;     //redis故障
+    const ERROR_SYS_WRONG            = 9;     //系统故障
 
 
     /**
-     * @var string 公用变量设置
+     * @var array 公用变量设置
      */
-    protected $jobName           = '';  //作业名（一组任务包集合名）
-    protected $arrTasks          = array(); //本次执行的任务数组
-    protected $arrPackets        = array(); //本次执行的任务包数组（以任务在调度器里的id为key,对应任务id为value ）
-
-    public $jobStartTime      = 0; //执行作业（任务集）开始的时间戳
-    public $jobEndTime        = 0; // 执行完成作业（任务集）限期的时间戳
-
+    protected $arrTasks   = array(); //本次执行的任务数组
+    protected $arrPackets = array(); //本次执行的任务包数组（以任务在调度器里的id为key,对应任务id为value ）
 
     //实例化数组
     protected static $arr_Instances = array();
@@ -91,7 +86,7 @@ abstract class MultiProcess_Base {
 
 
     //存储最近一次的错误记录
-    protected $error = array(
+    protected static $error = array(
         'no'  => self::ERROR_FREE, //错误码
         'msg' => '运行良好，无错误',
     );
@@ -158,19 +153,28 @@ abstract class MultiProcess_Base {
     /**
      * 获取一个对象
      * @param callable $callHandler 执行任务的回调函数
-     * @param string   $namespace   命名空间
      * @return object
      */
-    public static function getInstance(callable $callHandler, $namespace = __NAMESPACE__) {
+    public static function getInstance(callable $callHandler) {
         $jobName = serialize($callHandler);
         $className = get_called_class();
-        if(isset(static::$arr_Instances[$namespace][$jobName]) && static::$arr_Instances[$namespace][$jobName] instanceof $className) {//如果已存在实例
-            static::$obj_Instance = static::$arr_Instances[$namespace][$jobName];
+        if(isset(static::$arr_Instances[__NAMESPACE__][$jobName]) && static::$arr_Instances[__NAMESPACE__][$jobName] instanceof $className) {//如果已存在实例
+            static::$obj_Instance = static::$arr_Instances[__NAMESPACE__][$jobName];
         } else{
-            static::$obj_Instance = new $className($callHandler, $namespace);
-            static::$arr_Instances[$namespace][$jobName] = static::$obj_Instance;
+            static::rebuildInstance($callHandler);
         }
         return static::$obj_Instance;
+    }
+
+    /**
+     * 重建对象
+     * @param callable $callHandler 执行任务的回调函数
+     */
+    protected static function rebuildInstance(callable $callHandler){
+        $jobName = serialize($callHandler);
+        $className = get_called_class();
+        self::$arr_Instances[__NAMESPACE__][$jobName] = new $className($callHandler);
+        self::$obj_Instance = self::$arr_Instances[__NAMESPACE__][$jobName];
     }
 
     /**
@@ -179,7 +183,7 @@ abstract class MultiProcess_Base {
      * @param string $msg 说明信息
      */
     protected function recordError($no, $msg) {
-        $this->error = array(
+        self::$error = array(
             'no' => $no,
             'msg'=> $msg,
         );
@@ -191,7 +195,7 @@ abstract class MultiProcess_Base {
      * @return bool
      */
     protected static function is_scheduler($objScheduler) {
-        if ((is_string($objScheduler) || is_object($objScheduler)) && is_subclass_of($objScheduler, 'MultiProcess_Scheduler')) {
+        if ((is_string($objScheduler) || is_object($objScheduler)) && is_subclass_of($objScheduler, 'MultiProcess_Scheduler_Base')) {
             return true;
         }
         return false;
@@ -252,7 +256,7 @@ abstract class MultiProcess_Base {
     }
 
     /**
-     * 检测子进程是否在运行中没有退出
+     * 检测子进程是否在运行中没有退出(因为本程序子进程都交由系统托管，无需主进程用wait_pid读取起运行状态，所以可以用此方法判断子进程是否退出)
      * @param int $pid 子进程pid
      * @return bool
      */

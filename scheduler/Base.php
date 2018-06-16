@@ -1,20 +1,23 @@
 <?php
 /**
  * @file    MultiProcess_Scheduler.php
- * @author  刘重量
+ * @author  刘重量(13439694341@qq.com)
  * @date    2018/05/06 10:14:51
  * @brief   调度器抽象类
  * */
 abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
 
     const SUB_HOST_NAME = 'main-server';      //自定义服务器名（当取不到机器名的时候，取此值）
-    const RETRY_COUNT = 3;          //重试次数限制
+    const RETRY_COUNT   = 3;                  //重试次数限制
 
-    protected $serverName = '';    //服务器名
-    protected $workName = '';      //任务处理程序名
+    public $jobStartTime  = 0;       //执行作业（任务集）开始的时间戳
+    public $jobEndTime    = 0;       // 执行完成作业（任务集）限期的时间戳
 
-    protected $pid = 0;              //子进程pid
-    protected $maxProcessPid = 0;  //主进程pid
+    protected $serverName = '';      //服务器名
+    protected $workName   = '';      //任务处理程序名
+
+    protected $pid  = 0;             //进程id
+    protected $pids = array();       //子进程pid组成的数组
 
     //该数组储存发包时间记录
     protected $arrPacketSendTime = array();
@@ -23,13 +26,12 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
     /**
      * 非公开构造函数防止外部实例化.
      * @param callable $callHandler 回调函数
-     * @param string   $namespace   命名空间
      */
-    protected function __construct(callable $callHandler, $namespace) {
+    protected function __construct(callable $callHandler) {
         $serverName = gethostname();
         $this->serverName = empty($serverName) ? self::SUB_HOST_NAME : $serverName;
         $handlerName = array(
-            'namespace' => $namespace,
+            'namespace' => __NAMESPACE__,
             'callback' => $callHandler,
         );
         $this->workName = serialize($handlerName);
@@ -54,32 +56,51 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
      * @return bool|mixed
      */
     public function exec(callable $handler, $forkNum, $callType) {
-        $pids = array();         //储存子进程pid的数组
         $childProcessNum = 0;     //已开启的子进程数
-
         //至少创建了多次，$childProcessNum == 0才算不成功
         $upperRetryCount = self::RETRY_COUNT;
+        pcntl_signal(SIGCHLD, SIG_IGN);  //主进程忽略SIGCHLD信号，子进程退出交由系统，防止产生僵尸进程
         while ($childProcessNum < $forkNum && $upperRetryCount > 0) {
             $pid = $this->forkChildProcessExec($handler,$upperRetryCount);
             if ($pid > 0) {
-                $pids[] = $pid;
+                $this->pids[] = $pid;
                 ++$childProcessNum;
             }
         }
-        if ($childProcessNum == 0) {
-            throw new Exception('子进程派生不成功', self::ERROR_FORK_PROCESS_FAIL);
+        if ($childProcessNum == 0 && empty($this->pids)) {
+            throw new Exception('子进程创建不成功', self::ERROR_FORK_PROCESS_FAIL);
         }
-        if ($callType == self::TYPE_CALL_WUNTRACED) {
-            foreach ($pids as $pid) {
-                pcntl_waitpid($pid, $status, WUNTRACED);
+        if ($callType == self::TYPE_CALL_WUNTRACED) {//如果是同步调用
+            while(count($this->pids) > 0) {
+                $invalidPids = array();
+                foreach ($this->pids as $pid) {
+                    if(false === self::subProcessIsRun($pid)) {
+                        $invalidPids[] = $pid;
+                    }
+                }
+                $this->pids = array_diff($this->pids, $invalidPids);
+                if(empty($this->pids)) {
+                    break;
+                }
+                if(time() < $this->jobEndTime) { 
+                    sleep(1);
+                    continue;
+                }
+                foreach($this->pids as $pid) {
+                    if(self::subProcessIsRun($pid)) {
+                        posix_kill($pid, SIGKILL);
+                    }
+                }
+                break;
             }
+            pcntl_signal(SIGCHLD, SIG_DFL);
         }
         return true;
     }
 
     /**
      * 获取作业上次的调度信息
-     * @param  callable $callHandler 回调函数
+     * @param  callable $callHandler 执行任务的调度函数
      * @return mixed
      */
     abstract public function getLastDispatcherInfo(callable $callHandler);
@@ -87,17 +108,17 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
     /**
      * 保存本次作业的调度信息
      * @param  callable $callHandler 回调函数
-     * @param  array $arrPackets
+     * @param  array    $arrPackets     任务包数组
      * @return mixed
      */
     abstract public function saveDispatcherInfo(callable $callHandler, array $arrPackets);
 
     /**
      * 加载本次执行的任务数组到调度器（产生以在redis中存储的任务id为索引，以原任务数组id为值的数组）
-     * @param array $arrTasks    组成本次作业的任务列表数组
-     * @param array $arrPackets  产生的任务包数组
+     * @param  array $arrTasks    组成本次作业的任务列表数组
+     * @return array
      */
-    public function loadArrTasks(array &$arrTasks, array &$arrPackets) {
+    public function loadArrTasks(array &$arrTasks) {
         $arrTasks = array_unique($arrTasks, SORT_REGULAR);
         $this->arrPackets = array();
         foreach ($arrTasks as $taskId => $taskObj) {
@@ -105,7 +126,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
             $this->arrPackets[$packetId] = $taskId;
         }
         $this->arrTasks = &$arrTasks;
-        $arrPackets = $this->arrPackets;
+        return $this->arrPackets;
     }
 
     /**
@@ -191,6 +212,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
     /**
      * 返回处理后已分配子进程正在执行的任务数组列表（key:任务名）
      * @param array $arrPacketIds 指定的任务包id查询范围
+     * @return array
      */
     public function getPacketAllocationList(array $arrPacketIds = array()) {
         $list = $this->getPacketsFromWorkPool($arrPacketIds);
@@ -200,6 +222,9 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
 
             //运行期内；非本机进程或者仍在运行中
             if (time() < $v['end_time'] && ($v['node'] != $this->serverName || $isRun)) {
+                if ($v['node'] == $this->serverName && !in_array($pid, $this->pids)) {
+                    $this->pids[] = $pid;
+                }
                 continue;
             }
             $packetStatus = self::PACKET_STATUS_WRONG;
@@ -262,11 +287,16 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
                 $this->pid = posix_getpid();
                 if (false === $this->pid) {//如果得不到自己的进程pid
                     exit(SIGKILL);
-                } elseif(false === $this->addPidToPool()) { //得到进程pid,但添加入进程池失败
-                    posix_kill($this->pid, SIGKILL);
-                    pcntl_waitpid($this->pid,$status,WUNTRACED);
                 }
-                MultiProcess_Child::exec($this, $handler, $this->pid); //已包含结束语句；子进程执行完毕后会自动退出，无需在附加退出语句
+                try {
+                    $this->addPidToPool();
+                    set_time_limit($this->jobEndTime-time());
+                    MultiProcess_Child::exec($this, $handler); //已包含结束语句；子进程执行完毕后会自动退出，无需在附加退出语句
+                } catch(Exception $e) {
+                    $this->recordError($e->getCode(), $e->getMessage());
+                    posix_kill($this->pid, SIGKILL); //发kill信号
+                    pcntl_waitpid($this->pid,$status,WUNTRACED);////阻塞，防止意外向下执行
+                }
             }
             usleep(rand(1, 1000000));
         }while(--$retryCount > 0);
@@ -294,7 +324,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
         $arrAllprocess = $this->getAllProcessInfo();
         foreach ($arrAllprocess as $pid => $endTime) {
             $isDel = true;//是否清除该进程
-            if (is_numeric($pid) && $pid > 0 && 0 == pcntl_waitpid($pid, $status, WNOHANG) && false === pcntl_wifstopped($status)) {//该进程还在运行
+            if (is_numeric($pid) && $pid > 0 && self::subProcessIsRun($pid)) {//该进程还在运行
                 if (is_numeric($endTime) && $endTime > time()) {
                     $isDel = false;
                 } elseif ($endTime < time()) { //超时
