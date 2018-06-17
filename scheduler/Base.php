@@ -30,8 +30,9 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
     protected function __construct(callable $callHandler) {
         $serverName = gethostname();
         $this->serverName = empty($serverName) ? self::SUB_HOST_NAME : $serverName;
+        $scope = static::getScope();
         $handlerName = array(
-            'namespace' => __NAMESPACE__,
+            'namespace' => $scope,
             'callback' => $callHandler,
         );
         $this->workName = serialize($handlerName);
@@ -294,9 +295,9 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
                     MultiProcess_Child::exec($this, $handler); //已包含结束语句；子进程执行完毕后会自动退出，无需在附加退出语句
                 } catch(Exception $e) {
                     $this->recordError($e->getCode(), $e->getMessage());
-                    posix_kill($this->pid, SIGKILL); //发kill信号
-                    pcntl_waitpid($this->pid,$status,WUNTRACED);////阻塞，防止意外向下执行
+                    $this->closeChildProcess();
                 }
+                exit(SIGKILL);//不能通过发送信号关闭，就用exit
             }
             usleep(rand(1, 1000000));
         }while(--$retryCount > 0);
@@ -329,7 +330,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
                     $isDel = false;
                 } elseif ($endTime < time()) { //超时
                     $isDel = posix_kill($pid, SIGKILL);
-                    if (false === $isDel) {
+                    if (self::subProcessIsRun($pid) && false === $isDel) {
                         trigger_error('failed to kill an sub process', E_USER_WARNING);
                     }
                 }

@@ -62,16 +62,16 @@ abstract class MultiProcess_Base {
     /*
      * 错误码选项
      */
-    const ERROR_FREE                 = 0;     //无错误
-    const ERROR_WRONG_PARAM          = 1;     //错误的参数值
-    const ERROR_MISS_PARAM           = 2;     //必需参数没有传
-    const ERROR_WRONG_SCHEDULER      = 3;     //调度器不可用
-    const ERROR_OVER_FORK_UPPER      = 4;     //进程数已达到上限
-    const ERROR_NOT_NEED_EXEC        = 5;     //所有任务已有其它相同程序执行，本次无需执行
-    const ERROR_FORK_PROCESS_FAIL    = 6;     //创建子进程失败
-    const ERROR_QUERY_FROM_SCHEDULER = 7;     //从调度器中查询数据时发生错误
-    const ERROR_REDIS_WRONG          = 8;     //redis故障
-    const ERROR_SYS_WRONG            = 9;     //系统故障
+    const ERROR_FREE                 = 0; //无错误
+    const ERROR_WRONG_PARAM          = 1; //错误的参数值
+    const ERROR_MISS_PARAM           = 2; //必需参数没有传
+    const ERROR_WRONG_SCHEDULER      = 3; //调度器不可用
+    const ERROR_OVER_FORK_UPPER      = 4; //进程数已达到上限
+    const ERROR_NOT_NEED_EXEC        = 5; //所有任务已有其它相同程序执行，本次无需执行
+    const ERROR_FORK_PROCESS_FAIL    = 6; //创建子进程失败
+    const ERROR_QUERY_FROM_SCHEDULER = 7; //从调度器中查询数据时发生错误
+    const ERROR_REDIS_WRONG          = 8; //redis故障
+    const ERROR_SYS_WRONG            = 9; //系统故障
 
 
     /**
@@ -153,30 +153,43 @@ abstract class MultiProcess_Base {
     /**
      * 获取一个对象
      * @param callable $callHandler 执行任务的回调函数
+     * @param string $scope 作用域
      * @return object
      */
-    public static function getInstance(callable $callHandler) {
+    public static function getInstance(callable $callHandler, $scope = null) {
         $jobName = serialize($callHandler);
         $className = get_called_class();
-        if(isset(static::$arr_Instances[__NAMESPACE__][$jobName]) && static::$arr_Instances[__NAMESPACE__][$jobName] instanceof $className) {//如果已存在实例
-            static::$obj_Instance = static::$arr_Instances[__NAMESPACE__][$jobName];
+        if (empty($scope)) {
+            $scope = static::getScope();
+        }
+        if(isset(static::$arr_Instances[$scope][$jobName]) && static::$arr_Instances[$scope][$jobName] instanceof $className) {//如果已存在实例
+            static::$obj_Instance = static::$arr_Instances[$scope][$jobName];
         } else{
-            static::rebuildInstance($callHandler);
+            static::rebuildInstance($callHandler, $scope);
         }
         return static::$obj_Instance;
     }
 
     /**
-     * 重建对象
+     * 重建对象对象
      * @param callable $callHandler 执行任务的回调函数
+     * @param string $scope 作用域
      */
-    protected static function rebuildInstance(callable $callHandler){
+    protected static function rebuildInstance(callable $callHandler, $scope){
         $jobName = serialize($callHandler);
         $className = get_called_class();
-        self::$arr_Instances[__NAMESPACE__][$jobName] = new $className($callHandler);
-        self::$obj_Instance = self::$arr_Instances[__NAMESPACE__][$jobName];
+        static::$arr_Instances[$scope][$jobName] = new $className($callHandler);
+        static::$obj_Instance = static::$arr_Instances[$scope][$jobName];
     }
 
+    /**
+     * 获取作用域
+     * @return string
+     */
+    protected static function getScope() {
+        $scope = __NAMESPACE__;
+        return empty($scope) ? 'global' : $scope;
+    }
     /**
      * 保存最后一次出错信息
      * @param int    $no  错误码
@@ -256,7 +269,7 @@ abstract class MultiProcess_Base {
     }
 
     /**
-     * 检测子进程是否在运行中没有退出(因为本程序子进程都交由系统托管，无需主进程用wait_pid读取起运行状态，所以可以用此方法判断子进程是否退出)
+     * 检测子进程是否在运行中没有退出(因为本程序子进程都交由系统，所以可以用此方法退出，需wait_pid读取状态的不适用)
      * @param int $pid 子进程pid
      * @return bool
      */

@@ -11,12 +11,12 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
     const KEY_ID_GENERATOR = 'MultiProcess_Id_GENERATOR'; //用做id发生器的redis的key
     
     private $hKey_ProcessPool_table = '';  //进程信息表名; redis的key;目前只存储以子进程pid为键名, 过期时间戳为值的哈希表数组
-    private $hKey_JobInfo_table = '';      //作业信息表; redis的key, 保存上次作业调度信息的表
-    private $hkey_TaskPool_table = '';     //任务池表; redis的key; 存储以序列化后任务的值为键名，唯一id号为值的哈希表数组
-    private $hKey_WorkPool_table = '';     //工作池表名; redis哈希表key; 存储以任务名为key,处理子进程pid为value的数组
-    private $hKey_TaskFinish_table = '';   //成员任务完成时间表名;   redis哈希表key; 存储以任务名为索引,完成时间戳为值的数组
-    private $hKey_TaskResult_table = '';   //成员任务执行结果表名;   redis哈希表key;  存储以任务名索引，执行结果为值的数组
-    private $hKey_RunTime_table = '';      //成员任务耗时表名 （哈希表Key, 存储子任务pid为key,花费时间为value的数组)
+    private $hKey_JobInfo_table = '';       //作业信息表; redis的key, 保存上次作业调度信息的表
+    private $hkey_TaskPool_table = '';      //任务池表; redis的key; 存储以序列化后任务的值为键名，唯一id号为值的哈希表数组
+    private $hKey_WorkPool_table = '';      //工作池表名; redis哈希表key; 存储以任务名为key,处理子进程pid为value的数组
+    private $hKey_TaskFinish_table = '';    //成员任务完成时间表名;   redis哈希表key; 存储以任务名为索引,完成时间戳为值的数组
+    private $hKey_TaskResult_table = '';    //成员任务执行结果表名;   redis哈希表key;  存储以任务名索引，执行结果为值的数组
+    private $hKey_RunTime_table = '';        //成员任务耗时表名 （哈希表Key, 存储子任务pid为key,花费时间为value的数组)
 
     /**
      * @var \Redis  redis原生对象
@@ -48,7 +48,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
             $this->hKey_TaskResult_table = $this->workName . '[' . self::KEYWORD_TASK . '_cost' . ']';      //redis key; 存储被处理过的任务包状态的表
             self::$objRedis->expire($this->hKey_TaskResult_table, 8640000);
             $this->jobStartTime = time(); //设置默认的作业开始执行的时间戳
-            $this->jobEndTime   = time() + 86400; //设置作业可被结束运行的时间戳
+            $this->jobEndTime = time() + 86400; //设置作业可被结束运行的时间戳
         }
     }
 
@@ -58,8 +58,9 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
      * @return mixed
      */
     public function getLastDispatcherInfo(callable $callHandler) {
+        $scope = static::getScope();
         $jobId = array(
-            'namespace' => __NAMESPACE__,
+            'namespace' => $scope,
             'callback'  => $callHandler,
         );
         $jobId = serialize($jobId);
@@ -83,8 +84,9 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
      * @return mixed
      */
     public function saveDispatcherInfo(callable $callHandler, array $arrPackets) {
+        $scope = static::getScope();
         $jobId = array(
-            'namespace' => __NAMESPACE__,
+            'namespace' => $scope,
             'callback'  => $callHandler,
         );
         $jobId = serialize($jobId);
@@ -123,7 +125,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
         if (!empty($processingTaskList)) {  //过滤掉数组中已分配处理子进程的任务
             $this->arrPackets = array_diff_key($this->arrPackets, $processingTaskList);
         }
-        if (!empty($arrPackets)) {
+        if (!empty($this->arrPackets)) {
             $finishPackets = $this->getFinishPackets();
             if (!empty($finishPackets)) { //过滤掉数组中已完成的任务名称元素
                 $this->arrPackets = array_diff_key($this->arrPackets, $finishPackets);
@@ -264,7 +266,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
         $list = $this->hMget($this->hKey_TaskFinish_table, $arrPacketName);
         $finishTasks = array();
         foreach ($list as $packetName => $endTime) {
-            if (is_numeric($endTime) && $endTime > $this->jobStartTime) {
+            if (!empty($endTime) && is_numeric($endTime) && $endTime > $this->jobStartTime) {
                 $finishTasks[$packetName] = $endTime;
             }
         }
@@ -280,6 +282,11 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
         $list = $this->hMget($this->hKey_TaskResult_table, $arrPacketName);
         $finishTasks = $this->getFinishPackets();
         $list = array_intersect_key($list, $finishTasks);
+        foreach($list as $packetId => $result) {
+            if(empty($result)) {
+                $list[$packetId] = self::PACKET_STATUS_WRONG;
+            }
+        }
         return $list;
     }
 
@@ -364,6 +371,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
      * @return bool
      */
     private function hExists($table, $field) {
+        self::renewRedisConnect();
         return self::$objRedis->hExists($table, $field);
     }
 
@@ -481,10 +489,14 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
      * @param int $retryCount 重试尝试连接的限制次数
      */
     private static function renewRedisConnect($retryCount = self::RETRY_COUNT) {
-        while ((!(self::$objRedis instanceof Redis) || '+PONG' != self::$objRedis->ping()) && --$retryCount >= 0) {
+        if (!(self::$objRedis instanceof Redis) || '+PONG' != self::$objRedis->ping()) {
             self::$objRedis = JJ_Redis::getObj('redis_proxy');
+            while ((!(self::$objRedis instanceof Redis) || '+PONG' != self::$objRedis->ping()) && $retryCount > 0){
+                usleep(rand(300000,1000000));
+                self::$objRedis = JJ_Redis::getObj('redis_proxy');
+            }
         }
-        if ($retryCount < 0) {
+        if ($retryCount == 0) {
             throw new Exception('redis 调度器无法使用', self::ERROR_WRONG_SCHEDULER);
         }
     }
