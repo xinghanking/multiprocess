@@ -10,8 +10,8 @@ abstract class MultiProcess_Base {
     /*
      * 项目常量定义
      */
-    const APP_NAME             = 'LeiDa';                        //项目名
-    const FORK_LIMIT           = 800;                            //项目内本类所有应用在单个服务器系统中同时存在的所开最大进程数
+    const APP_NAME             = 'LeiDa';                     //项目名
+    const FORK_LIMIT           = 360;                            //项目内本类所有应用在单个服务器系统中同时存在的所开最大进程数
     const KEYWORD_PROCESS      = 'process';                      //子进程信息表名称关键词标识
     const KEYWORD_TASK         = 'task';                         //任务关键词标识
     const CALSS_MAIN           = 'MultiProcess_Main';            //主调类名
@@ -62,23 +62,23 @@ abstract class MultiProcess_Base {
     /*
      * 错误码选项
      */
-    const ERROR_FREE                 = 0; //无错误
-    const ERROR_WRONG_PARAM          = 1; //错误的参数值
-    const ERROR_MISS_PARAM           = 2; //必需参数没有传
-    const ERROR_WRONG_SCHEDULER      = 3; //调度器不可用
-    const ERROR_OVER_FORK_UPPER      = 4; //进程数已达到上限
-    const ERROR_NOT_NEED_EXEC        = 5; //所有任务已有其它相同程序执行，本次无需执行
-    const ERROR_FORK_PROCESS_FAIL    = 6; //创建子进程失败
-    const ERROR_QUERY_FROM_SCHEDULER = 7; //从调度器中查询数据时发生错误
-    const ERROR_REDIS_WRONG          = 8; //redis故障
-    const ERROR_SYS_WRONG            = 9; //系统故障
+    const ERROR_FREE                 = 0;      //无错误
+    const ERROR_WRONG_PARAM          = 1;      //错误的参数值
+    const ERROR_MISS_PARAM           = 2;      //必需参数没有传
+    const ERROR_WRONG_SCHEDULER      = 3;      //调度器不可用
+    const ERROR_OVER_FORK_UPPER      = 4;      //进程数已达到上限
+    const ERROR_NOT_NEED_EXEC        = 5;      //所有任务已有其它相同程序执行，本次无需执行
+    const ERROR_FORK_PROCESS_FAIL    = 6;      //创建子进程失败
+    const ERROR_QUERY_FROM_SCHEDULER = 7;      //从调度器中查询数据时发生错误
+    const ERROR_REDIS_WRONG          = 8;      //redis故障
+    const ERROR_SYS_WRONG            = 9;      //系统故障
 
 
     /**
      * @var array 公用变量设置
      */
-    protected $arrTasks   = array(); //本次执行的任务数组
-    protected $arrPackets = array(); //本次执行的任务包数组（以任务在调度器里的id为key,对应任务id为value ）
+    protected $arrTasks   = array();           //本次执行的任务数组
+    protected $arrPackets = array();           //本次执行的任务包数组（以任务在调度器里的id为key,对应任务id为value ）
 
     //实例化数组
     protected static $arr_Instances = array();
@@ -141,13 +141,13 @@ abstract class MultiProcess_Base {
      * 数组value部分为对应的处理该参数值的类函数名
      */
     protected static $arrParamsFormat = array(
-        'callHandler'   => 'is_callHandler',
-        'arrTasks'      => 'is_arrTasks',
-        'forkNum'       => 'is_forkNum',
-        'runTime'       => 'is_runTime',
-        'callType'      => 'is_callType',
-        'packetSort'    => 'is_packetSort',
-        'scheduler'     => 'is_scheduler',
+        'callHandler' => 'is_callHandler',
+        'arrTasks'    => 'is_arrTasks',
+        'forkNum'     => 'is_forkNum',
+        'runTime'     => 'is_runTime',
+        'callType'    => 'is_callType',
+        'packetSort'  => 'is_packetSort',
+        'scheduler'   => 'is_scheduler',
     );
 
     /**

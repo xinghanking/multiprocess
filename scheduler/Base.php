@@ -7,17 +7,17 @@
  * */
 abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
 
-    const SUB_HOST_NAME = 'main-server';      //自定义服务器名（当取不到机器名的时候，取此值）
-    const RETRY_COUNT   = 3;                  //重试次数限制
+    const SUB_HOST_NAME   = 'main-server';      //自定义服务器名（当取不到机器名的时候，取此值）
+    const RETRY_COUNT     = 3;                  //重试次数限制
 
-    public $jobStartTime  = 0;       //执行作业（任务集）开始的时间戳
-    public $jobEndTime    = 0;       // 执行完成作业（任务集）限期的时间戳
+    protected $serverName = '';                 //服务器名
+    protected $workName   = '';                 //任务处理程序名
 
-    protected $serverName = '';      //服务器名
-    protected $workName   = '';      //任务处理程序名
+    protected $pid        = 0;                  //进程id
+    protected $pids       = array();            //子进程pid组成的数组
 
-    protected $pid  = 0;             //进程id
-    protected $pids = array();       //子进程pid组成的数组
+    public $jobStartTime  = 0;                  //执行作业（任务集）的开始时间戳
+    public $jobEndTime    = 0;                  //执行作业（任务集）的限期完成时间戳
 
     //该数组储存发包时间记录
     protected $arrPacketSendTime = array();
@@ -28,15 +28,18 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
      * @param callable $callHandler 回调函数
      */
     protected function __construct(callable $callHandler) {
-        $serverName = gethostname();
+        $serverName       = gethostname();
         $this->serverName = empty($serverName) ? self::SUB_HOST_NAME : $serverName;
+
         $scope = static::getScope();
         $handlerName = array(
             'namespace' => $scope,
-            'callback' => $callHandler,
+            'callback'  => $callHandler,
         );
-        $this->workName = serialize($handlerName);
+
+        $this->workName     = serialize($handlerName);
         $this->jobStartTime = time();
+
         $this->init();
     }
 
@@ -60,7 +63,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
         $childProcessNum = 0;     //已开启的子进程数
         //至少创建了多次，$childProcessNum == 0才算不成功
         $upperRetryCount = self::RETRY_COUNT;
-        pcntl_signal(SIGCHLD, SIG_IGN);  //主进程忽略SIGCHLD信号，子进程退出交由系统，防止产生僵尸进程
+        pcntl_signal(SIGCHLD, SIG_IGN);  //主进程忽略SIGCHLD信号，这样子进程在主进程推出后会被交由系统托管，可防止产生僵尸进程
         while ($childProcessNum < $forkNum && $upperRetryCount > 0) {
             $pid = $this->forkChildProcessExec($handler,$upperRetryCount);
             if ($pid > 0) {
@@ -69,27 +72,33 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
             }
         }
         if ($childProcessNum == 0 && empty($this->pids)) {
+            trigger_error('Failed to fork process!', E_USER_WARNING);
             throw new Exception('子进程创建不成功', self::ERROR_FORK_PROCESS_FAIL);
         }
         if ($callType == self::TYPE_CALL_WUNTRACED) {//如果是同步调用
             while(count($this->pids) > 0) {
-                $invalidPids = array();
-                foreach ($this->pids as $pid) {
+                //清理已结束运行的子进程pid
+                foreach ($this->pids as $k => $pid) {
                     if(false === self::subProcessIsRun($pid)) {
-                        $invalidPids[] = $pid;
+                        unset($this->pids[$k]);
                     }
                 }
-                $this->pids = array_diff($this->pids, $invalidPids);
+
+                //如果所有的子进程都结束运行了
                 if(empty($this->pids)) {
                     break;
                 }
+
+                //有子进程还在运行，且运行结束时间未到
                 if(time() < $this->jobEndTime) { 
                     sleep(1);
                     continue;
                 }
+
+                //本次作业运行限时已用完，那就发信号中止现在还在运行的子进程
                 foreach($this->pids as $pid) {
-                    if(self::subProcessIsRun($pid)) {
-                        posix_kill($pid, SIGKILL);
+                    if (false === posix_kill($pid, SIGKILL)) {
+                        trigger_error('Failed to send sinal to a child process, pid:' . $pid, E_USER_WARNING);
                     }
                 }
                 break;
@@ -136,7 +145,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
      */
     public function setProcessDuration($duration) {
         $this->jobStartTime = time();
-        $this->jobEndTime = $this->jobStartTime + $duration;
+        $this->jobEndTime   = $this->jobStartTime + $duration;
     }
 
     /**
@@ -232,7 +241,7 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
             if ($v['end_time'] < time() && $isRun) {
                 $res = posix_kill($pid, SIGKILL); //结束超时进程
                 if (false === $res) { //如果终止进程失败
-                    trigger_error('给子进程发送退出信号失败', E_USER_WARNING);
+                    trigger_error('Failed to send a kill sinal to a child process, pid:' . $pid, E_USER_WARNING);
                 }
             }
 
@@ -271,7 +280,6 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
         pcntl_waitpid($this->pid, $status, WUNTRACED);
     }
 
-
     /**
      * 产生一个分支进程执行作业，并把分进程的pid添加到进程信息表
      * @param  callable $handler  处理单个任务的回调函数
@@ -281,15 +289,21 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
     final protected function forkChildProcessExec($handler, &$retryCount) {
         do {
             $pid = pcntl_fork();
-            if ($pid > 0) { //主进程得到是创建成功的子进程pid号，返回此pid
+
+            //主进程得到是创建成功的子进程pid号，返回此pid
+            if ($pid > 0) {
                 return $pid;
             }
+
+            //子进程得到是0
             if ($pid == 0) {
                 $this->pid = posix_getpid();
                 if (false === $this->pid) {//如果得不到自己的进程pid
+                    trigger_error('child process failed to use posix_getpid function to get pid.', E_USER_WARNING);
                     exit(SIGKILL);
                 }
                 try {
+                    //将获取到的pid加入进程信息存储池；并限时子进程的时间；执行任务
                     $this->addPidToPool();
                     set_time_limit($this->jobEndTime-time());
                     MultiProcess_Child::exec($this, $handler); //已包含结束语句；子进程执行完毕后会自动退出，无需在附加退出语句
@@ -297,8 +311,11 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
                     $this->recordError($e->getCode(), $e->getMessage());
                     $this->closeChildProcess();
                 }
-                exit(SIGKILL);//不能通过发送信号关闭，就用exit
+                //执行到这里，说明不能通过发送信号关闭，那就调用exit
+                exit(SIGKILL);
             }
+
+            //得到pid是小于0，说明fork失败，随机暂停小于1秒的时间，在尝试fork
             usleep(rand(1, 1000000));
         }while(--$retryCount > 0);
         return false; // 派生子进程失败或者存储子进程的pid到进程信息表失败
@@ -330,8 +347,8 @@ abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
                     $isDel = false;
                 } elseif ($endTime < time()) { //超时
                     $isDel = posix_kill($pid, SIGKILL);
-                    if (self::subProcessIsRun($pid) && false === $isDel) {
-                        trigger_error('failed to kill an sub process', E_USER_WARNING);
+                    if (false === $isDel) {
+                        trigger_error('Failed to send a kill sinal to a child process, pid:' . $pid, E_USER_WARNING);
                     }
                 }
             }
