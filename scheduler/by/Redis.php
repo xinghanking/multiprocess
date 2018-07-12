@@ -7,9 +7,9 @@
  **/
 class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
 
-    const KEY_TASK_TABLE   = 'MultiProcess_Task_Pool';    //存储以序列化后任务的值为键名，唯一id号为值的哈希表数组
+    const KEY_TASK_TABLE   = 'MultiProcess_Task_Pool';     //存储以序列化后任务的值为键名，唯一id号为值的哈希表数组
     const KEY_ID_GENERATOR = 'MultiProcess_Id_GENERATOR'; //用做id发生器的redis的key
-	const DEF_TTL          = 3600;                        //默认任务表key的生存时间
+	const DEF_TTL           = 3600;                             //默认任务表key的生存时间
 
     private $hKey_ProcessPool_table = '';    //进程信息表名; redis的key;目前只存储以子进程pid为键名, 过期时间戳为值的哈希表数组
     private $hKey_JobInfo_table     = '';    //作业信息表; redis的key, 保存上次作业调度信息的表
@@ -38,7 +38,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
             $this->hKey_JobInfo_table = self::APP_NAME . '[job_info]';
 
             $this->hKey_WorkPool_table   = $this->workName . '[' . self::KEYWORD_TASK . '_pool'    . ']';   //redis key; 存储正在被子进程执行的任务包信息表
-			self::$objRedis->expire($this->hKey_WorkPool_table，self::DEF_TTL);
+            self::$objRedis->expire($this->hKey_WorkPool_table, self::DEF_TTL);
             $this->hKey_TaskFinish_table = $this->workName . '[' . self::KEYWORD_TASK . '_endtime' . ']';   //redis key; 存储任务包完成时间的信息表
 			self::$objRedis->expire($this->hKey_TaskFinish_table, self::DEF_TTL);
             $this->hKey_RunTime_table    = $this->workName . '[' . self::KEYWORD_TASK . '_result'  . ']';   //redis key; 存储处理成员任务的耗时信息的表
