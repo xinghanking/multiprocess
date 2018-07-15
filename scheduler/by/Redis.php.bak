@@ -429,13 +429,12 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
     private function hGet($table,$field) {
         $table = trim($table);
         $field = trim($field);
-       
+        if (!(self::$objRedis instanceof Redis)) {
+            self::renewRedisConnect();
+        }
         $retryCount = self::RETRY_COUNT;
         do {
-            try{ 
-				if (!(self::$objRedis instanceof Redis)) {
-					self::renewRedisConnect();
-				}
+            try{
                 if (!(self::$objRedis->hExists($table,$field))) {
                     return null;
                 }

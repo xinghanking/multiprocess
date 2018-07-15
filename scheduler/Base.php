@@ -7,7 +7,7 @@
  * */
 abstract class MultiProcess_Scheduler_Base extends MultiProcess_Base {
 
-    const SUB_HOST_NAME   = 'main-server';      //自定义服务器名（当取不到机器名的时候，取此值）
+    const SUB_HOST_NAME   = 'main-server';    //自定义服务器名（当取不到机器名的时候，取此值）
     const RETRY_COUNT     = 3;                  //重试次数限制
 
     protected $serverName = '';                 //服务器名
