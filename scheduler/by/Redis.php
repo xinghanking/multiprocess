@@ -446,7 +446,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
                 if ($retryCount == 0) {
                     throw new Exception($e->getMessage(),$e->getCode());
                 }
-                $seconds = rand(floor(self::MAX_WAIT_TIME * $retry/self::MAX_WAIT_TIME),self::MAX_WAIT_TIME);
+                $seconds = rand(floor(self::MAX_WAIT_TIME * $retryCount/self::MAX_WAIT_TIME),self::MAX_WAIT_TIME);
                 usleep($seconds);
                 self::renewRedisConnect();
             }
