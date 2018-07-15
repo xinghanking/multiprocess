@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /**
  * @file   RedisController.php
  * @author 刘重量(13439694341@qq.com)
@@ -539,7 +539,7 @@ class MultiProcess_Scheduler_By_Redis extends MultiProcess_Scheduler_Base {
                 $res = (self::$objRedis instanceof Redis) ? self::$objRedis->hDel($table, $field) : false;
             } catch (Exception $e) {
                 if (--$retry >= 0) {
-                    $waitTime = rand(floor(self::MAX_WAIT_TIME * $retry/self::MAX_WAIT_TIME),self::MAX_WAIT_TIME);
+                    $waitTime = rand(floor(self::MAX_WAIT_TIME * $retry/self::MAX_WAIT_TIME), self::MAX_WAIT_TIME);
                     usleep($waitTime);
                 }
                 $msg = $e->getMessage() . ', code:' . $e->getCode();
